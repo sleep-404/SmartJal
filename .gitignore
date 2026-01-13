@@ -1,0 +1,6 @@
+# Large files
+*.mp4
+*.mp3
+GTWells_Krishna/GTWells/kris.dbf
+LULC_Krishna/LULC_2005.tif
+.env
