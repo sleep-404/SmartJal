@@ -1,0 +1,1 @@
+# SmartJal Data Models
