@@ -403,6 +403,314 @@ def create_extraction_features(villages: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     return villages
 
 
+def extract_lulc_features(villages: gpd.GeoDataFrame,
+                          lulc: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    """
+    Extract land use / land cover features for each village.
+
+    LULC gridcode mapping (typical NRSC classification):
+    - 1: Water bodies
+    - 2: Built-up/Urban
+    - 3: Cropland - Kharif
+    - 4: Cropland - Rabi
+    - 5: Double/Triple Crop
+    - 6: Plantation
+    - 7: Fallow land
+    - 8: Forest
+    - 9: Wasteland/Barren
+    - 10: Scrub/Grassland
+
+    Features created:
+    - lulc_crop_pct: Percentage of cropland (affects irrigation demand)
+    - lulc_forest_pct: Percentage of forest (affects ET and recharge)
+    - lulc_urban_pct: Percentage of urban (affects runoff)
+    - lulc_water_pct: Percentage of water bodies
+    - lulc_barren_pct: Percentage of wasteland/barren
+    """
+    villages = villages.copy()
+
+    # Ensure same CRS
+    if lulc.crs != villages.crs:
+        lulc = lulc.to_crs(villages.crs)
+
+    print("  Computing LULC percentages for each village...")
+
+    # Initialize columns
+    villages['lulc_crop_pct'] = 0.0
+    villages['lulc_forest_pct'] = 0.0
+    villages['lulc_urban_pct'] = 0.0
+    villages['lulc_water_pct'] = 0.0
+    villages['lulc_barren_pct'] = 0.0
+
+    # Define gridcode groupings
+    crop_codes = [3, 4, 5, 6]  # Kharif, Rabi, Double crop, Plantation
+    forest_codes = [8]
+    urban_codes = [2]
+    water_codes = [1]
+    barren_codes = [7, 9, 10]  # Fallow, Wasteland, Scrub
+
+    # Spatial join to find overlapping LULC polygons
+    for idx, village in villages.iterrows():
+        try:
+            # Find LULC polygons that intersect this village
+            intersecting = lulc[lulc.intersects(village.geometry)]
+
+            if len(intersecting) == 0:
+                continue
+
+            # Calculate intersection areas
+            total_area = village.geometry.area
+            if total_area == 0:
+                continue
+
+            crop_area = 0
+            forest_area = 0
+            urban_area = 0
+            water_area = 0
+            barren_area = 0
+
+            for _, lulc_poly in intersecting.iterrows():
+                intersection = village.geometry.intersection(lulc_poly.geometry)
+                inter_area = intersection.area
+                gridcode = lulc_poly['gridcode']
+
+                if gridcode in crop_codes:
+                    crop_area += inter_area
+                elif gridcode in forest_codes:
+                    forest_area += inter_area
+                elif gridcode in urban_codes:
+                    urban_area += inter_area
+                elif gridcode in water_codes:
+                    water_area += inter_area
+                elif gridcode in barren_codes:
+                    barren_area += inter_area
+
+            # Calculate percentages
+            villages.at[idx, 'lulc_crop_pct'] = 100 * crop_area / total_area
+            villages.at[idx, 'lulc_forest_pct'] = 100 * forest_area / total_area
+            villages.at[idx, 'lulc_urban_pct'] = 100 * urban_area / total_area
+            villages.at[idx, 'lulc_water_pct'] = 100 * water_area / total_area
+            villages.at[idx, 'lulc_barren_pct'] = 100 * barren_area / total_area
+
+        except Exception:
+            continue
+
+    # Fill missing with regional averages
+    for col in ['lulc_crop_pct', 'lulc_forest_pct', 'lulc_urban_pct', 'lulc_water_pct', 'lulc_barren_pct']:
+        median_val = villages[col].median()
+        villages[col] = villages[col].fillna(median_val if pd.notna(median_val) else 0)
+
+    print(f"  Crop land: {villages['lulc_crop_pct'].mean():.1f}% avg")
+    print(f"  Forest: {villages['lulc_forest_pct'].mean():.1f}% avg")
+    print(f"  Urban: {villages['lulc_urban_pct'].mean():.1f}% avg")
+
+    return villages
+
+
+def extract_geomorphology_features(villages: gpd.GeoDataFrame,
+                                    geomorphology: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    """
+    Extract geomorphology features for each village.
+
+    Landform affects groundwater recharge potential:
+    - High recharge: Flood plain, Channel fill, Deltaic plain, River terrace, Valley fill
+    - Moderate recharge: Pediment, Pediplain, Coastal plain, Beach
+    - Low recharge: Residual hill, Structural hill, Denudational hill, Inselberg
+
+    Features created:
+    - geom_recharge_score: Weighted recharge potential (0-1)
+    - geom_is_floodplain: Binary flag for flood plain areas
+    - geom_is_hill: Binary flag for hilly terrain
+    """
+    villages = villages.copy()
+
+    # Ensure same CRS
+    if geomorphology.crs != villages.crs:
+        geomorphology = geomorphology.to_crs(villages.crs)
+
+    print("  Computing geomorphology features...")
+
+    # Define recharge scores by landform type
+    recharge_scores = {
+        # High recharge (0.8-1.0)
+        'Flood plain': 1.0,
+        'Channel fill': 0.95,
+        'Deltaic plain': 0.9,
+        'River terrace-1': 0.85,
+        'River terrace-2': 0.85,
+        'River terrace-Older': 0.8,
+        'Valley fill': 0.85,
+        'Paleo channel': 0.8,
+        'Channel bar': 0.75,
+        'Point bar': 0.75,
+        'Natural levee': 0.7,
+
+        # Moderate recharge (0.4-0.7)
+        'Pediment': 0.6,
+        'Pediplain': 0.55,
+        'Coastal plain': 0.5,
+        'Beach': 0.5,
+        'Beach ridge': 0.45,
+        'Beach ridge and swale': 0.45,
+        'Intermontane valley': 0.5,
+        'Swale': 0.5,
+
+        # Low recharge (0.1-0.4)
+        'Residual hill': 0.2,
+        'Structural hill': 0.2,
+        'Denudational hill': 0.25,
+        'Inselberg': 0.2,
+        'Linear ridge': 0.3,
+        'Plateau': 0.35,
+
+        # Special areas
+        'Mangrove': 0.3,
+        'Salt flat': 0.1,
+        'Mud flat': 0.2,
+        'Tidal flat': 0.2,
+        'Creek': 0.6,
+        'Channel island': 0.5,
+        'Offshore island': 0.3,
+        'Spit': 0.3,
+        'Structural valley': 0.5,
+    }
+
+    floodplain_types = ['Flood plain', 'Deltaic plain', 'Channel fill', 'Natural levee']
+    hill_types = ['Residual hill', 'Structural hill', 'Denudational hill', 'Inselberg', 'Linear ridge']
+
+    # Initialize columns
+    villages['geom_recharge_score'] = 0.5  # Default moderate
+    villages['geom_is_floodplain'] = 0
+    villages['geom_is_hill'] = 0
+
+    # Get the description column name
+    desc_col = 'DISCRIPTIO' if 'DISCRIPTIO' in geomorphology.columns else 'DISCRIPT_1'
+
+    for idx, village in villages.iterrows():
+        try:
+            # Find intersecting geomorphology polygons
+            intersecting = geomorphology[geomorphology.intersects(village.geometry)]
+
+            if len(intersecting) == 0:
+                continue
+
+            total_area = village.geometry.area
+            if total_area == 0:
+                continue
+
+            # Calculate area-weighted recharge score
+            weighted_score = 0
+            floodplain_area = 0
+            hill_area = 0
+
+            for _, geom_poly in intersecting.iterrows():
+                intersection = village.geometry.intersection(geom_poly.geometry)
+                inter_area = intersection.area
+                weight = inter_area / total_area
+
+                landform = geom_poly[desc_col] if desc_col in geom_poly else ''
+                score = recharge_scores.get(landform, 0.5)
+                weighted_score += score * weight
+
+                if landform in floodplain_types:
+                    floodplain_area += inter_area
+                if landform in hill_types:
+                    hill_area += inter_area
+
+            villages.at[idx, 'geom_recharge_score'] = weighted_score
+            villages.at[idx, 'geom_is_floodplain'] = 1 if floodplain_area / total_area > 0.3 else 0
+            villages.at[idx, 'geom_is_hill'] = 1 if hill_area / total_area > 0.3 else 0
+
+        except Exception:
+            continue
+
+    # Fill missing with regional median
+    villages['geom_recharge_score'] = villages['geom_recharge_score'].fillna(0.5)
+
+    print(f"  Recharge score: {villages['geom_recharge_score'].mean():.2f} avg")
+    print(f"  Floodplain villages: {villages['geom_is_floodplain'].sum()}")
+    print(f"  Hilly villages: {villages['geom_is_hill'].sum()}")
+
+    return villages
+
+
+def extract_extended_rainfall_features(villages: gpd.GeoDataFrame,
+                                        rainfall_files: Dict[Tuple[int, int], Path],
+                                        target_year: int = 2023,
+                                        target_month: int = 10) -> gpd.GeoDataFrame:
+    """
+    Extract extended rainfall features with longer lag periods.
+
+    Groundwater response to rainfall can take 3-12 months.
+
+    Additional features:
+    - rainfall_lag4 to rainfall_lag6: 4-6 month lags
+    - rainfall_cumulative_6m: 6-month cumulative
+    - rainfall_annual: Full year rainfall
+    - rainfall_deficit: Difference from long-term average
+    """
+    villages = villages.copy()
+
+    print("  Adding extended rainfall lags (4-6 months)...")
+
+    # Extended lags (4-6 months)
+    for lag in range(4, 7):
+        lag_month = target_month - lag
+        lag_year = target_year
+        while lag_month <= 0:
+            lag_month += 12
+            lag_year -= 1
+
+        lag_key = (lag_year, lag_month)
+        col_name = f'rainfall_lag{lag}'
+
+        if lag_key in rainfall_files:
+            rainfall_lag = []
+            raster_path = rainfall_files[lag_key]
+
+            for _, row in villages.iterrows():
+                stats = extract_raster_stats_for_polygon(raster_path, row.geometry, ['mean'])
+                rainfall_lag.append(stats['mean'])
+
+            villages[col_name] = rainfall_lag
+        else:
+            villages[col_name] = villages.get('rainfall_lag3', 50.0)  # Fallback
+
+    # 6-month cumulative
+    cum_cols = ['rainfall_current', 'rainfall_lag1', 'rainfall_lag2', 'rainfall_lag3', 'rainfall_lag4', 'rainfall_lag5']
+    villages['rainfall_cumulative_6m'] = sum(
+        villages[col].fillna(0) for col in cum_cols if col in villages.columns
+    )
+
+    # Annual rainfall (sum of last 12 months where available)
+    annual_total = []
+    for _, row in villages.iterrows():
+        total = 0
+        for m in range(12):
+            check_month = target_month - m
+            check_year = target_year
+            while check_month <= 0:
+                check_month += 12
+                check_year -= 1
+            key = (check_year, check_month)
+            if key in rainfall_files:
+                stats = extract_raster_stats_for_polygon(rainfall_files[key], row.geometry, ['mean'])
+                total += stats['mean'] if not np.isnan(stats['mean']) else 0
+        annual_total.append(total)
+
+    villages['rainfall_annual'] = annual_total
+
+    # Fill NaN
+    for col in villages.columns:
+        if 'rainfall' in col:
+            villages[col] = villages[col].fillna(villages[col].median())
+
+    print(f"  6-month cumulative: {villages['rainfall_cumulative_6m'].mean():.0f}mm avg")
+    print(f"  Annual rainfall: {villages['rainfall_annual'].mean():.0f}mm avg")
+
+    return villages
+
+
 def build_feature_matrix(data: dict,
                          target_year: int = 2023,
                          target_month: int = 10) -> Tuple[pd.DataFrame, pd.DataFrame]:
@@ -424,26 +732,55 @@ def build_feature_matrix(data: dict,
     villages = data['villages'].copy()
 
     # 1. Terrain features
-    print("\n[1/5] Extracting terrain features...")
+    print("\n[1/8] Extracting terrain features...")
     villages = extract_terrain_features(villages, data['dem_path'])
 
     # 2. Rainfall features
-    print("\n[2/5] Extracting rainfall features...")
+    print("\n[2/8] Extracting rainfall features...")
     villages = extract_rainfall_features(
         villages, data['rainfall_files'],
         target_year, target_month
     )
 
-    # 3. Aquifer features
-    print("\n[3/5] Creating aquifer features...")
+    # 3. Extended rainfall features (longer lags)
+    print("\n[3/8] Extracting extended rainfall features...")
+    villages = extract_extended_rainfall_features(
+        villages, data['rainfall_files'],
+        target_year, target_month
+    )
+
+    # 4. LULC features
+    print("\n[4/8] Extracting LULC features...")
+    if 'lulc' in data and data['lulc'] is not None:
+        villages = extract_lulc_features(villages, data['lulc'])
+    else:
+        print("  Warning: LULC data not available, skipping")
+        villages['lulc_crop_pct'] = 50.0
+        villages['lulc_forest_pct'] = 10.0
+        villages['lulc_urban_pct'] = 5.0
+        villages['lulc_water_pct'] = 2.0
+        villages['lulc_barren_pct'] = 33.0
+
+    # 5. Geomorphology features
+    print("\n[5/8] Extracting geomorphology features...")
+    if 'geomorphology' in data and data['geomorphology'] is not None:
+        villages = extract_geomorphology_features(villages, data['geomorphology'])
+    else:
+        print("  Warning: Geomorphology data not available, skipping")
+        villages['geom_recharge_score'] = 0.5
+        villages['geom_is_floodplain'] = 0
+        villages['geom_is_hill'] = 0
+
+    # 6. Aquifer features
+    print("\n[6/8] Creating aquifer features...")
     villages = create_aquifer_features(villages)
 
-    # 4. Extraction features
-    print("\n[4/5] Creating extraction features...")
+    # 7. Extraction features
+    print("\n[7/8] Creating extraction features...")
     villages = create_extraction_features(villages)
 
-    # 5. Temporal features for piezometers
-    print("\n[5/5] Creating temporal features...")
+    # 8. Temporal features for piezometers
+    print("\n[8/8] Creating temporal features...")
     piezo_features = create_temporal_features(
         data['water_levels'],
         target_year, target_month
@@ -468,7 +805,12 @@ def get_feature_names() -> Dict[str, List[str]]:
     return {
         'terrain': ['elevation_mean', 'elevation_min', 'elevation_max', 'slope_mean', 'slope_max'],
         'rainfall': ['rainfall_current', 'rainfall_lag1', 'rainfall_lag2', 'rainfall_lag3',
-                    'rainfall_cumulative_3m', 'rainfall_monsoon'],
+                    'rainfall_lag4', 'rainfall_lag5', 'rainfall_lag6',
+                    'rainfall_cumulative_3m', 'rainfall_cumulative_6m',
+                    'rainfall_monsoon', 'rainfall_annual'],
+        'lulc': ['lulc_crop_pct', 'lulc_forest_pct', 'lulc_urban_pct',
+                'lulc_water_pct', 'lulc_barren_pct'],
+        'geomorphology': ['geom_recharge_score', 'geom_is_floodplain', 'geom_is_hill'],
         'soil': ['infiltration_score', 'runoff_score'],
         'extraction': ['n_wells', 'well_density', 'avg_well_depth',
                       'monthly_extraction_ham', 'extraction_intensity'],
