@@ -263,6 +263,8 @@ def calculate_village_extraction(villages: gpd.GeoDataFrame,
     - Number of working wells
     - Average well depth
     - Total monthly extraction (draft / 4 months)
+
+    Includes aquifer-level imputation for villages without direct well data.
     """
     villages = villages.copy()
 
@@ -296,18 +298,76 @@ def calculate_village_extraction(villages: gpd.GeoDataFrame,
 
     # Merge with villages
     villages = villages.merge(well_counts, on='village', how='left')
-    villages['n_wells'] = villages['n_wells'].fillna(0).astype(int)
-    villages['avg_well_depth'] = villages['avg_well_depth'].fillna(50)  # Default 50m
+
+    # Track which villages have direct well data
+    villages['has_well_data'] = villages['n_wells'].notna() & (villages['n_wells'] > 0)
 
     # Monthly extraction = n_wells * avg_draft_per_well
     # Based on typical values: ~0.1 ha.m per well per season, so ~0.025 ha.m per month
     avg_draft_per_well_per_month = 0.025  # ha.m
-    villages['monthly_extraction_ham'] = villages['n_wells'] * avg_draft_per_well_per_month
+    villages['monthly_extraction_ham'] = villages['n_wells'].fillna(0) * avg_draft_per_well_per_month
+
+    # =========================================
+    # AQUIFER-LEVEL IMPUTATION for missing data
+    # =========================================
+    villages_without_wells = (~villages['has_well_data']).sum()
+    if villages_without_wells > 0 and 'geo_class' in villages.columns:
+        print(f"  Imputing data for {villages_without_wells} villages without wells...")
+
+        # Calculate aquifer-level statistics from villages WITH well data
+        # Use per-village density to avoid division issues
+        villages_with_wells = villages[villages['has_well_data']].copy()
+        villages_with_wells['well_density_per_km2'] = villages_with_wells['n_wells'] / villages_with_wells['area_km2'].clip(lower=0.1)
+        villages_with_wells['extraction_per_km2'] = villages_with_wells['monthly_extraction_ham'] / villages_with_wells['area_km2'].clip(lower=0.1)
+
+        aquifer_stats = villages_with_wells.groupby('geo_class').agg(
+            aquifer_well_density=('well_density_per_km2', 'median'),
+            aquifer_avg_depth=('avg_well_depth', 'median'),
+            aquifer_extraction_intensity=('extraction_per_km2', 'median')
+        ).reset_index()
+
+        # Apply imputation based on village area and aquifer averages
+        for idx, row in villages[~villages['has_well_data']].iterrows():
+            aquifer = row['geo_class']
+            area_km2 = row['area_km2'] if 'area_km2' in row and pd.notna(row['area_km2']) else 10.0
+
+            # Get aquifer stats
+            aquifer_row = aquifer_stats[aquifer_stats['geo_class'] == aquifer]
+
+            if len(aquifer_row) > 0:
+                well_density = aquifer_row['aquifer_well_density'].values[0]
+                avg_depth = aquifer_row['aquifer_avg_depth'].values[0]
+                extraction_intensity = aquifer_row['aquifer_extraction_intensity'].values[0]
+
+                # Handle NaN or inf values
+                if pd.isna(well_density) or np.isinf(well_density):
+                    well_density = 5.0  # Default wells per km2
+                if pd.isna(extraction_intensity) or np.isinf(extraction_intensity):
+                    extraction_intensity = 0.1  # Default extraction
+
+                # Estimate based on area and aquifer characteristics
+                estimated_wells = max(1, min(500, int(well_density * area_km2 * 0.5)))  # Conservative, capped
+                villages.at[idx, 'n_wells'] = estimated_wells
+                villages.at[idx, 'avg_well_depth'] = avg_depth if pd.notna(avg_depth) else 50.0
+                villages.at[idx, 'monthly_extraction_ham'] = extraction_intensity * area_km2 * 0.5
+            else:
+                # Use regional median if aquifer stats not available
+                villages.at[idx, 'n_wells'] = max(1, int(villages['n_wells'].median()))
+                villages.at[idx, 'avg_well_depth'] = villages['avg_well_depth'].median()
+                villages.at[idx, 'monthly_extraction_ham'] = villages['monthly_extraction_ham'].median()
+
+        print(f"  Imputed {villages_without_wells} villages using aquifer-level averages")
+
+    # Fill any remaining NaN with defaults
+    villages['n_wells'] = villages['n_wells'].fillna(0).astype(int)
+    villages['avg_well_depth'] = villages['avg_well_depth'].fillna(50)  # Default 50m
+    villages['monthly_extraction_ham'] = villages['monthly_extraction_ham'].fillna(0)
 
     print(f"Calculated village extraction:")
     print(f"  Wells spatially matched: {len(wells_in_villages):,}")
-    print(f"  Villages with wells: {(villages['n_wells'] > 0).sum()}")
-    print(f"  Total wells assigned: {villages['n_wells'].sum():,}")
+    print(f"  Villages with direct well data: {villages['has_well_data'].sum()}")
+    print(f"  Villages with imputed data: {(~villages['has_well_data']).sum()}")
+    print(f"  Total wells (direct + imputed): {villages['n_wells'].sum():,}")
     print(f"  Avg wells per village: {villages['n_wells'].mean():.1f}")
 
     return villages
@@ -384,7 +444,9 @@ def preprocess_all(data: dict) -> dict:
         'aquifers': data['aquifers'],
         'rainfall_files': data['rainfall_files'],
         'dem_path': data['dem_path'],
-        'grace': data['grace']
+        'grace': data['grace'],
+        'lulc': data.get('lulc'),
+        'geomorphology': data.get('geomorphology')
     }
 
 
