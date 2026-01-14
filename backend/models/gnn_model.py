@@ -124,13 +124,16 @@ class SpatialGraphBuilder:
       1. Same aquifer type
       2. Within distance threshold
       3. Weighted by inverse distance
+      4. Elevation-based flow weighting (water flows downhill)
     """
 
     def __init__(self,
                  distance_threshold_km: float = 20.0,
-                 same_aquifer_bonus: float = 2.0):
+                 same_aquifer_bonus: float = 2.0,
+                 elevation_flow_weight: float = 1.5):
         self.distance_threshold = distance_threshold_km
         self.same_aquifer_bonus = same_aquifer_bonus
+        self.elevation_flow_weight = elevation_flow_weight
         self.scaler = StandardScaler()
         self.feature_cols = []
 
@@ -182,7 +185,17 @@ class SpatialGraphBuilder:
         piezo_aquifers = piezometers['geo_class'].fillna('Unknown').values
         all_aquifers = np.concatenate([village_aquifers, piezo_aquifers])
 
-        # Build edges based on distance and aquifer
+        # Get elevations for flow weighting
+        village_elev = villages['elevation_mean'].fillna(50.0).values if 'elevation_mean' in villages.columns else np.full(n_villages, 50.0)
+        piezo_elev = piezometers['msl_m'].fillna(50.0).values if 'msl_m' in piezometers.columns else np.full(n_piezos, 50.0)
+        all_elevations = np.concatenate([village_elev, piezo_elev])
+
+        # Get recharge scores for additional weighting
+        village_recharge = villages['geom_recharge_score'].fillna(0.5).values if 'geom_recharge_score' in villages.columns else np.full(n_villages, 0.5)
+        piezo_recharge = np.full(n_piezos, 0.5)  # Default for piezometers
+        all_recharge = np.concatenate([village_recharge, piezo_recharge])
+
+        # Build edges based on distance, aquifer, elevation, and recharge
         edge_list = []
         edge_weights = []
 
@@ -195,18 +208,30 @@ class SpatialGraphBuilder:
 
                 # Check if within threshold
                 if dist <= self.distance_threshold:
-                    # Calculate edge weight
-                    weight = 1.0 / (dist + 0.1)  # Inverse distance
+                    # Calculate base edge weight (inverse distance)
+                    base_weight = 1.0 / (dist + 0.1)
 
-                    # Bonus for same aquifer
-                    if all_aquifers[i] == all_aquifers[j]:
-                        weight *= self.same_aquifer_bonus
+                    # Bonus for same aquifer (hydrogeological connectivity)
+                    aquifer_factor = self.same_aquifer_bonus if all_aquifers[i] == all_aquifers[j] else 1.0
 
-                    # Add bidirectional edges
+                    # Elevation-based flow weighting
+                    # Higher weight for edges going from high to low elevation (downhill flow)
+                    elev_diff = all_elevations[i] - all_elevations[j]
+                    elev_factor_i_to_j = 1.0 + self.elevation_flow_weight * max(0, elev_diff / 100)  # Downhill i->j
+                    elev_factor_j_to_i = 1.0 + self.elevation_flow_weight * max(0, -elev_diff / 100)  # Downhill j->i
+
+                    # Recharge potential bonus (connect high recharge areas)
+                    recharge_factor = 1.0 + 0.5 * (all_recharge[i] + all_recharge[j])
+
+                    # Calculate directional weights
+                    weight_i_to_j = base_weight * aquifer_factor * elev_factor_i_to_j * recharge_factor
+                    weight_j_to_i = base_weight * aquifer_factor * elev_factor_j_to_i * recharge_factor
+
+                    # Add directional edges (asymmetric for flow)
                     edge_list.append([i, j])
                     edge_list.append([j, i])
-                    edge_weights.append(weight)
-                    edge_weights.append(weight)
+                    edge_weights.append(weight_i_to_j)
+                    edge_weights.append(weight_j_to_i)
 
         print(f"  Edges: {len(edge_list)} (within {self.distance_threshold}km)")
 
@@ -274,13 +299,26 @@ class SpatialGraphBuilder:
                              piezometers: gpd.GeoDataFrame) -> np.ndarray:
         """Build feature matrix for all nodes."""
 
-        # Common features
+        # Common features - expanded to include LULC and geomorphology
         feature_cols = [
+            # Location
             'centroid_lat', 'centroid_lon', 'area_km2',
+            # Terrain
             'elevation_mean', 'slope_mean',
-            'rainfall_current', 'rainfall_cumulative_3m',
+            # Rainfall (including extended lags)
+            'rainfall_current', 'rainfall_cumulative_3m', 'rainfall_cumulative_6m',
+            'rainfall_lag1', 'rainfall_lag2', 'rainfall_lag3',
+            'rainfall_lag4', 'rainfall_lag5', 'rainfall_lag6',
+            'rainfall_annual',
+            # Soil
             'infiltration_score', 'runoff_score',
-            'n_wells', 'well_density'
+            # Extraction
+            'n_wells', 'well_density', 'extraction_intensity',
+            # LULC (new)
+            'lulc_crop_pct', 'lulc_forest_pct', 'lulc_urban_pct',
+            'lulc_water_pct', 'lulc_barren_pct',
+            # Geomorphology (new)
+            'geom_recharge_score', 'geom_is_floodplain', 'geom_is_hill'
         ]
 
         # Get available features
