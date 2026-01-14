@@ -33,3 +33,10 @@ venv/
 .idea/
 .vscode/
 *.swp
+
+# Node.js
+node_modules/
+
+# Model artifacts (generated)
+*.pkl
+backend/models/metadata.json
