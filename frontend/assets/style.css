@@ -1,0 +1,57 @@
+/* Smart Jal - Custom Styles */
+
+.main-header {
+    font-size: 2.5rem;
+    font-weight: bold;
+    color: #1e3a5f;
+    text-align: center;
+    padding: 1rem;
+}
+
+.metric-card {
+    background-color: #f0f8ff;
+    padding: 1rem;
+    border-radius: 10px;
+    border-left: 4px solid #1e88e5;
+}
+
+.risk-critical {
+    background-color: #ffebee;
+    border-color: #c62828;
+}
+
+.risk-high {
+    background-color: #fff3e0;
+    border-color: #ef6c00;
+}
+
+.risk-moderate {
+    background-color: #fff8e1;
+    border-color: #f9a825;
+}
+
+.risk-low {
+    background-color: #e8f5e9;
+    border-color: #2e7d32;
+}
+
+.stMetric > div {
+    background-color: #f8f9fa;
+    padding: 10px;
+    border-radius: 5px;
+}
+
+/* Sidebar styling */
+.css-1d391kg {
+    background-color: #f5f7fa;
+}
+
+/* Table styling */
+.dataframe {
+    font-size: 0.9rem;
+}
+
+/* Alert styling */
+.stAlert {
+    border-radius: 8px;
+}
