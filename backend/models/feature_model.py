@@ -49,9 +49,11 @@ class WaterLevelPredictor:
 
     # Default feature columns
     FEATURE_COLS = [
-        # Rainfall
+        # Rainfall (current and lags)
         'rainfall_current', 'rainfall_lag1', 'rainfall_lag2', 'rainfall_lag3',
-        'rainfall_cumulative_3m', 'rainfall_monsoon',
+        'rainfall_lag4', 'rainfall_lag5', 'rainfall_lag6',
+        'rainfall_cumulative_3m', 'rainfall_cumulative_6m',
+        'rainfall_monsoon', 'rainfall_annual',
         # Terrain
         'elevation_mean', 'slope_mean',
         # Soil
@@ -60,6 +62,21 @@ class WaterLevelPredictor:
         'n_wells', 'well_density', 'avg_well_depth', 'extraction_intensity',
         # Location
         'centroid_lat', 'centroid_lon', 'area_km2',
+        # LULC
+        'lulc_crop_pct', 'lulc_forest_pct', 'lulc_urban_pct',
+        'lulc_water_pct', 'lulc_barren_pct',
+        # Geomorphology
+        'geom_recharge_score', 'geom_is_floodplain', 'geom_is_hill',
+        # Water proximity
+        'dist_to_water_km', 'near_water',
+        # Vegetation/crop intensity (NDVI proxy)
+        'vegetation_index', 'crop_intensity', 'irrigation_demand_proxy',
+        # Seasonal encoding
+        'month_sin', 'month_cos', 'is_monsoon', 'is_post_monsoon', 'is_pre_monsoon',
+        # ET proxy (evapotranspiration)
+        'et_proxy', 'eto_proxy', 'kc_weighted',
+        # Satellite features
+        'modis_et', 'modis_et_lag1', 'sentinel_ndvi', 'sentinel_ndvi_lag1', 'smap_soil_moisture',
     ]
 
     def __init__(self,
