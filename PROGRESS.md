@@ -101,38 +101,173 @@ DEM (SRTM) → Slope for runoff
 
 ---
 
-## 4. Implementation Plan
+## 4. Implementation Plan (Detailed)
 
 ### Phase 1: Data Foundation (Current)
-- [ ] 1.1 Load piezometer data (locations + time series)
-- [ ] 1.2 Load village boundaries
-- [ ] 1.3 Load aquifer boundaries
-- [ ] 1.4 Load soil data with infiltration classification
-- [ ] 1.5 Load bore well data
-- [ ] 1.6 Load pumping data
-- [ ] 1.7 Spatial join: assign each village and piezometer to an aquifer
-- [ ] 1.8 Spatial join: assign soil type to each village
 
-### Phase 2: Aquifer-Stratified Interpolation
-- [ ] 2.1 Group piezometers by aquifer type
-- [ ] 2.2 For each aquifer, fit IDW/Kriging model
-- [ ] 2.3 Predict water level at each village centroid
-- [ ] 2.4 Calculate uncertainty based on distance to nearest piezometer
-- [ ] 2.5 Leave-one-out cross-validation
+#### 1.1 Load Piezometer Data
+- [ ] 1.1.1 Parse `master data_updated.xlsx`
+- [ ] 1.1.2 Extract metadata: ID, lat, lon, aquifer type, depth, MSL
+- [ ] 1.1.3 Extract monthly water level time series (347 months: 1997-2025)
+- [ ] 1.1.4 Convert to GeoDataFrame with Point geometry
+- [ ] 1.1.5 Validate: check for missing coordinates, invalid values
+
+#### 1.2 Load Village Boundaries
+- [ ] 1.2.1 Read `OKri_Vil.shp` shapefile
+- [ ] 1.2.2 Standardize column names (district, mandal, village)
+- [ ] 1.2.3 Calculate village centroids
+- [ ] 1.2.4 Ensure CRS is EPSG:4326 (WGS84)
+- [ ] 1.2.5 Calculate village area in km²
+
+#### 1.3 Load Aquifer Boundaries
+- [ ] 1.3.1 Read `Aquifers_Krishna.shp`
+- [ ] 1.3.2 Identify aquifer types from `Geo_Class` column
+- [ ] 1.3.3 Ensure CRS matches villages (EPSG:4326)
+
+#### 1.4 Load Soil Data
+- [ ] 1.4.1 Read `OKri_Soils.shp`
+- [ ] 1.4.2 Classify soils into Sandy/Loamy/Clayey categories
+- [ ] 1.4.3 Assign infiltration factors: Sandy=0.8, Loamy=0.5, Clayey=0.2
+
+#### 1.5 Load Bore Well Data
+- [ ] 1.5.1 Read `kris.csv` (88,988 records)
+- [ ] 1.5.2 Filter to working wells only (per department guidance)
+- [ ] 1.5.3 Filter to bore/tube wells (exclude open wells)
+- [ ] 1.5.4 Extract lat/lon and convert to GeoDataFrame
+
+#### 1.6 Load Pumping Data
+- [ ] 1.6.1 Read `Pumping Data.xlsx` (skip header row)
+- [ ] 1.6.2 Parse monsoon and non-monsoon draft values
+- [ ] 1.6.3 Calculate monthly extraction: draft / 4 months
+
+#### 1.7 Perform Spatial Joins
+- [ ] 1.7.1 Join villages → aquifers (assign aquifer type to each village)
+- [ ] 1.7.2 Join piezometers → aquifers (assign aquifer type to each piezometer)
+- [ ] 1.7.3 Join villages → soils (dominant soil type per village)
+- [ ] 1.7.4 Count bore wells per village (well density)
+- [ ] 1.7.5 Join pumping data → villages (by mandal + village name)
+
+#### 1.8 Create Unified Dataset
+- [ ] 1.8.1 Merge all village attributes into single GeoDataFrame
+- [ ] 1.8.2 Save to `data/processed/village_features.geojson`
+- [ ] 1.8.3 Save piezometers to `data/processed/piezometers.geojson`
+
+**Phase 1 Output:**
+- `village_features.geojson` (939 villages with aquifer, soil, wells, pumping)
+- `piezometers.geojson` (138 piezometers with metadata and aquifer assignment)
+
+---
+
+### Phase 2: Spatial Interpolation
+
+#### 2.1 Analyze Piezometer Distribution
+- [ ] 2.1.1 Count piezometers per aquifer type
+- [ ] 2.1.2 Identify aquifers with <3 piezometers (need fallback strategy)
+- [ ] 2.1.3 Calculate piezometer density per aquifer (piezos/km²)
+
+#### 2.2 Select Target Time Period
+- [ ] 2.2.1 Identify latest month with most complete data
+- [ ] 2.2.2 Calculate average water level per piezometer (for static prediction)
+- [ ] 2.2.3 Decide: predict latest month OR long-term average
+
+#### 2.3 Implement IDW Interpolation
+- [ ] 2.3.1 Create IDW function: `idw(target_point, source_points, values, power=2)`
+- [ ] 2.3.2 Implement aquifer-stratified wrapper: only use piezometers from same aquifer
+- [ ] 2.3.3 Handle edge case: village in aquifer with 0 piezometers → use nearest from any aquifer
+- [ ] 2.3.4 Handle edge case: village in aquifer with 1-2 piezometers → blend with neighbors
+
+#### 2.4 Generate Baseline Predictions
+- [ ] 2.4.1 For each village: predict water level using aquifer-stratified IDW
+- [ ] 2.4.2 Calculate distance to nearest piezometer (in same aquifer)
+- [ ] 2.4.3 Calculate distance to nearest piezometer (any aquifer)
+- [ ] 2.4.4 Assign uncertainty: higher if far from piezometers
+
+#### 2.5 Leave-One-Out Cross-Validation
+- [ ] 2.5.1 For each of 138 piezometers: remove it, predict its value, record error
+- [ ] 2.5.2 Calculate RMSE = sqrt(mean(errors²))
+- [ ] 2.5.3 Calculate MAE = mean(|errors|)
+- [ ] 2.5.4 Calculate R² = 1 - SS_res/SS_tot
+- [ ] 2.5.5 Analyze errors by aquifer type (which aquifers have worst predictions?)
+- [ ] 2.5.6 Analyze errors by distance to nearest neighbor
+
+**Phase 2 Output:**
+- Baseline predictions for 939 villages
+- Validation metrics: RMSE, MAE, R²
+- Error analysis by aquifer
+
+---
 
 ### Phase 3: Physics Constraints
-- [ ] 3.1 Extract rainfall per village (from CHIRPS)
-- [ ] 3.2 Calculate infiltration factor per village (from soil type)
-- [ ] 3.3 Calculate recharge = rainfall × infiltration
-- [ ] 3.4 Calculate extraction from pumping data (713 villages have direct data)
-- [ ] 3.5 Estimate extraction for remaining villages from bore well density
-- [ ] 3.6 Apply water balance adjustment
+
+#### 3.1 Extract Rainfall Data
+- [ ] 3.1.1 Load CHIRPS GeoTIFFs for target time period
+- [ ] 3.1.2 For each village polygon: extract mean rainfall (zonal statistics)
+- [ ] 3.1.3 Calculate annual rainfall (sum of monthly)
+- [ ] 3.1.4 Calculate monsoon vs non-monsoon rainfall
+
+#### 3.2 Calculate Recharge
+- [ ] 3.2.1 Get infiltration factor for each village from soil type
+- [ ] 3.2.2 Calculate: `Recharge = Rainfall × Infiltration_Factor`
+- [ ] 3.2.3 Convert units to consistent format (mm → m, per area)
+
+#### 3.3 Calculate Extraction
+- [ ] 3.3.1 For villages with pumping data (713): use directly
+  - Extraction = n_wells × unit_draft / village_area
+- [ ] 3.3.2 For villages without pumping data (226): estimate from bore well density
+  - Count wells per village, apply average draft
+- [ ] 3.3.3 Validate extraction estimates against known values
+
+#### 3.4 Apply Water Balance
+- [ ] 3.4.1 Calculate: `ΔStorage = Recharge - Extraction` per village
+- [ ] 3.4.2 Compare ΔStorage to interpolated water level trend
+- [ ] 3.4.3 Flag villages where interpolation contradicts physics (e.g., level rising but extraction > recharge)
+- [ ] 3.4.4 Adjust predictions: blend interpolation with physics expectation
+
+**Phase 3 Output:**
+- Physics-adjusted predictions for 939 villages
+- Recharge and extraction estimates per village
+- Physics consistency flags
+
+---
 
 ### Phase 4: Output & Visualization
-- [ ] 4.1 Generate predictions for all 939 villages
-- [ ] 4.2 Classify risk tiers (Critical/High/Moderate/Low)
-- [ ] 4.3 Create simple map visualization
-- [ ] 4.4 Export results to GeoJSON/CSV
+
+#### 4.1 Generate Final Predictions
+- [ ] 4.1.1 Combine: spatial interpolation (primary) + physics adjustment (secondary)
+- [ ] 4.1.2 Calculate final uncertainty = f(distance, physics consistency, aquifer type)
+- [ ] 4.1.3 Generate confidence tier: High/Medium/Low
+
+#### 4.2 Classify Risk Tiers
+- [ ] 4.2.1 Define thresholds based on water level depth:
+  - Critical: > 15m depth
+  - High: 10-15m depth
+  - Moderate: 5-10m depth
+  - Low: < 5m depth
+- [ ] 4.2.2 Assign risk tier to each village
+- [ ] 4.2.3 Calculate summary: count and % of villages per tier
+
+#### 4.3 Export Results
+- [ ] 4.3.1 CSV: `outputs/village_predictions.csv`
+  - Columns: village_id, name, mandal, lat, lon, predicted_level, uncertainty, risk_tier
+- [ ] 4.3.2 GeoJSON: `outputs/village_predictions.geojson`
+  - Full geometry + all attributes for mapping
+- [ ] 4.3.3 Summary report: `outputs/prediction_report.md`
+  - Validation metrics, risk distribution, methodology notes
+
+#### 4.4 Build Dashboard
+- [ ] 4.4.1 Create Streamlit app: `src/dashboard.py`
+- [ ] 4.4.2 Add map with Folium showing village polygons
+- [ ] 4.4.3 Color villages by risk tier (red/orange/yellow/green)
+- [ ] 4.4.4 Add click-to-select: show village details
+- [ ] 4.4.5 Show piezometer locations with their influence radius
+- [ ] 4.4.6 Add summary statistics panel
+- [ ] 4.4.7 Add aquifer filter dropdown
+
+**Phase 4 Output:**
+- `outputs/village_predictions.csv`
+- `outputs/village_predictions.geojson`
+- `outputs/prediction_report.md`
+- Working Streamlit dashboard
 
 ---
 
