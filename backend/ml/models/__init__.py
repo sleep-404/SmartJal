@@ -1,1 +1,0 @@
-# SmartJal ML Models
