@@ -50,3 +50,9 @@ data/external_downloaded/rainfall/*.nc
 *.nc
 *.tif
 *.hgt
+
+# Large binary files in hackathon data (keep locally, not on GitHub)
+*.dbf
+*.zip
+LULC_2005.tif
+*.ovr
