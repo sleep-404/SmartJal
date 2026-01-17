@@ -1,7 +1,8 @@
 # Smart Jal - Implementation Progress Tracker
 
-**Last Updated:** 2026-01-17
-**Status:** Planning Phase
+**Last Updated:** 2026-01-17 13:45 IST
+**Status:** Starting Development
+**Current Phase:** Phase 1 - Data Foundation
 
 ---
 
@@ -11,312 +12,141 @@
 Predict groundwater levels for **939 villages** in Krishna District, Andhra Pradesh, using data from only **138 piezometers** (monitoring wells).
 
 ### 1.2 Why This Is Hard
-- **No ground truth**: We have water level readings at 138 points, but need predictions for 939 villages. There's no way to directly validate predictions for the ~800 villages without sensors.
-- **Sparse coverage**: 138 piezometers across ~7,000 km² means roughly 1 sensor per 50 km².
-- **Geological heterogeneity**: Different aquifer types (granite, basalt, alluvium) behave differently. Simple distance-based interpolation ignores this.
+- **No ground truth**: We have water level readings at 138 points, but need predictions for 939 villages
+- **Sparse coverage**: 138 piezometers across ~7,000 km² = 1 sensor per 50 km²
+- **Geological heterogeneity**: Different aquifer types behave differently
 
 ### 1.3 What Success Looks Like
 1. Predictions for all 939 villages with uncertainty estimates
-2. Predictions that are **physically consistent** (respect water balance)
-3. Predictions that are **geologically coherent** (respect aquifer boundaries)
-4. A way to **validate** predictions despite lacking ground truth at most locations
+2. Predictions that respect aquifer boundaries (geologically coherent)
+3. Predictions that satisfy water balance (physically consistent)
+4. Validation via leave-one-out cross-validation on piezometers
 
 ---
 
-## 2. Data Available
+## 2. Data Inventory (VERIFIED)
 
 ### 2.1 Hackathon-Provided Data
-| Dataset | Records | Description |
-|---------|---------|-------------|
-| Piezometer readings | 138 stations × 28 years | Monthly water level measurements |
-| Village boundaries | 939 polygons | Administrative boundaries with centroids |
-| Mandal boundaries | 42 polygons | Sub-district administrative units |
-| Aquifer boundaries | 8 zones | Geological aquifer types |
-| Bore wells | ~89,000 records | Location, depth, status, crop type |
-| Soils | 151 polygons | Soil classification |
-| Geomorphology | 614 polygons | Landform types |
-| LULC | Polygons | Land use/land cover (2005) |
-| Pumping data | 714 villages | Extraction rates by season |
 
-### 2.2 External Data (Downloaded)
-| Dataset | Source | Resolution | Use |
-|---------|--------|------------|-----|
-| GRACE TWS | NASA | ~50 km, monthly | Regional groundwater constraint |
-| CHIRPS Rainfall | UCSB | ~5 km, monthly | Recharge estimation |
-| DEM | SRTM | 30m | Terrain analysis |
+| Dataset | File Path | Records | Verified |
+|---------|-----------|---------|----------|
+| **Water Levels** | `data/hackathon_provided/WaterLevels_Krishna/master data_updated.xlsx` | 138 piezometers × 347 months (1997-2025) | ✓ |
+| **Villages** | `data/hackathon_provided/UseCase_extracted/OKri_Vil.shp` | 939 polygons | ✓ |
+| **Mandals** | `data/hackathon_provided/UseCase_extracted/OKri_Mdl.shp` | 42 polygons | ✓ |
+| **Aquifers** | `data/hackathon_provided/Aquifers_Krishna/Aquifers_Krishna.shp` | 8 zones | ✓ |
+| **Soils** | `data/hackathon_provided/UseCase_extracted/OKri_Soils.shp` | 151 polygons | ✓ |
+| **Geomorphology** | `data/hackathon_provided/GM_Krishna/GM_Krishna.shp` | 614 polygons | ✓ |
+| **Bore Wells** | `data/hackathon_provided/GTWells_Krishna/GTWells/kris.csv` | 88,988 records | ✓ |
+| **Pumping Data** | `data/hackathon_provided/Pumping Data.xlsx` | 713 villages | ✓ |
+| **LULC** | `data/hackathon_provided/LULC_Krishna/LULC_Krishna1.shp` | Present | ✓ |
 
-### 2.3 Additional Data to Consider (from Research)
-| Dataset | Source | Resolution | Use | Status |
-|---------|--------|------------|-----|--------|
-| MODIS NDVI | NASA | 250m | Vegetation stress proxy | Not downloaded |
-| MODIS LST | NASA | 1km | Thermal anomaly proxy | Not downloaded |
-| MODIS ET | NASA | 500m | Evapotranspiration | Not downloaded |
-| ESA WorldCover | ESA | 10m | Updated LULC (2021) | Not downloaded |
+### 2.2 External Data (Downloaded - NOT from hackathon)
 
----
+| Dataset | Path | Purpose | Required? |
+|---------|------|---------|-----------|
+| **CHIRPS Rainfall** | `data/external_downloaded/rainfall/chirps/` | Recharge calculation | YES - not in hackathon data |
+| **SRTM DEM** | `data/external_downloaded/dem/` | Slope/terrain | YES - not in hackathon data |
+| **GRACE** | `data/external_downloaded/grace/` | Regional constraint | OPTIONAL - for validation |
 
-## 3. Solution Architecture
+### 2.3 Data NOT Provided by Hackathon (Gap Analysis)
 
-### 3.1 Core Insight
-The research findings identified that the key challenge is **validation without ground truth**. The solution is to use **multiple independent signals** that constrain predictions:
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    MULTI-SIGNAL ARCHITECTURE                     │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  CONSTRAINT 1: GRACE Satellite (Regional)                       │
-│  ├── Provides total groundwater storage at ~50km scale          │
-│  └── Village predictions must sum to GRACE regional value       │
-│                                                                 │
-│  CONSTRAINT 2: Physics (Water Balance)                          │
-│  ├── ΔStorage = Recharge - Extraction                           │
-│  ├── Recharge = f(Rainfall, Soil, Slope)                        │
-│  └── Extraction = f(Wells, Pumping, Crops)                      │
-│                                                                 │
-│  CONSTRAINT 3: Geology (Aquifer Boundaries)                     │
-│  ├── Interpolation respects aquifer boundaries                  │
-│  └── Different models per aquifer type                          │
-│                                                                 │
-│  SIGNAL 1: Piezometer Readings (Direct)                         │
-│  ├── 138 stations with known water levels                       │
-│  └── Primary training data                                      │
-│                                                                 │
-│  SIGNAL 2: Vegetation Stress (Indirect)                         │
-│  ├── NDVI anomalies indicate water availability                 │
-│  └── Independent validation signal                              │
-│                                                                 │
-│  SIGNAL 3: Land Surface Temperature (Indirect)                  │
-│  ├── Thermal anomalies correlate with groundwater depth         │
-│  └── Independent validation signal                              │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-### 3.2 Implementation Approach
-
-Based on research findings, we will implement in this order:
-
-#### Phase 1: Data Foundation
-1. Load and validate all hackathon data
-2. Download and process GRACE satellite data properly
-3. Download NDVI/LST data for multi-signal validation
-4. Create unified village feature dataset
-
-#### Phase 2: Baseline Model (Spatial Interpolation)
-1. Implement aquifer-stratified kriging
-2. Validate spatial autocorrelation within aquifers
-3. Generate baseline predictions with uncertainty
-
-#### Phase 3: Physics Constraints
-1. Implement water balance equation
-2. Calculate recharge from rainfall + soil + slope
-3. Calculate extraction from wells + pumping data
-4. Constrain predictions to satisfy water balance
-
-#### Phase 4: GRACE Regional Constraint
-1. Process GRACE data to extract groundwater storage
-2. Implement constraint: village predictions sum to GRACE
-3. Adjust predictions to match regional satellite observation
-
-#### Phase 5: Multi-Signal Validation
-1. Extract NDVI anomalies per village
-2. Extract LST anomalies per village
-3. Cross-validate: villages with low NDVI should have deeper water
-4. Use as independent validation (not training) signal
-
-#### Phase 6: Model Selection
-Choose ONE of these based on time/complexity:
-- **Option A**: Aquifer-stratified kriging + physics + GRACE (simpler, robust)
-- **Option B**: Graph Neural Network with geology edges (novel, higher risk)
-- **Option C**: Physics-Informed Neural Network (novel, medium risk)
-
-#### Phase 7: Explainability & Dashboard
-1. Generate explanations for each prediction
-2. Build simple dashboard showing predictions + uncertainty
-3. Implement active learning: which villages to validate first
+| Data | Mentioned in Orientation? | Our Solution |
+|------|---------------------------|--------------|
+| Rainfall | Yes, they said they have it | Downloaded CHIRPS as substitute |
+| DEM/Elevation | Not mentioned | Downloaded SRTM |
 
 ---
 
-## 4. Technical Specifications
+## 3. Solution Approach (Simplified)
 
-### 4.1 Key Equations
+### 3.1 Core Strategy
 
-**Water Balance:**
+Focus on hackathon data with minimal external supplements:
+
 ```
-ΔS = R - E ± L
+INPUTS (Hackathon Data)                    OUTPUT
+─────────────────────                      ──────
+138 Piezometers (water levels)
+    ↓
+Aquifer Boundaries (8 zones)      ───→     939 Village Predictions
+    ↓                                      with uncertainty
+Soil Types (infiltration)
+    ↓
+Pumping Data (extraction)
+    ↓
+Bore Well Density (extraction proxy)
 
-Where:
-  ΔS = Change in groundwater storage
-  R  = Recharge = Rainfall × Infiltration_Factor × (1 - Runoff_Factor)
-  E  = Extraction = n_wells × unit_draft / area
-  L  = Lateral flow (usually small, can ignore for village scale)
-```
-
-**GRACE Constraint:**
-```
-Σ(village_prediction × village_area) ≈ GRACE_regional_value × total_area
-```
-
-**Aquifer-Stratified Interpolation:**
-```
-For village v in aquifer A:
-  prediction(v) = Σ w_i × observation(p_i)  for all piezometers p_i in A
-
-Where:
-  w_i = 1/d(v, p_i)^2 / Σ(1/d(v, p_j)^2)  (IDW weights)
-  d(v, p) = distance between village v and piezometer p
+EXTERNAL SUPPLEMENTS
+────────────────────
+Rainfall (CHIRPS) → Recharge calculation
+DEM (SRTM) → Slope for runoff
 ```
 
-### 4.2 Validation Strategy
+### 3.2 Method: Aquifer-Stratified Interpolation + Physics
 
-Since we can't validate at village level directly:
+**Step 1: Spatial Interpolation (within aquifer)**
+- For each village, find its aquifer type
+- Only use piezometers from the SAME aquifer for interpolation
+- Use IDW (Inverse Distance Weighting) or Kriging
 
-1. **Cross-validation on piezometers**: Leave-one-out CV on 138 known points
-2. **GRACE consistency**: Check if village sums match regional satellite
-3. **Physical plausibility**: Check water balance is satisfied
-4. **Multi-signal correlation**: Villages with vegetation stress should have deeper water
-5. **Active learning**: Recommend which villages to field-validate first
+**Step 2: Physics Adjustment**
+- Calculate expected water balance: ΔStorage = Recharge - Extraction
+- Recharge = Rainfall × Soil_Infiltration_Factor
+- Extraction = Pumping_Data or Bore_Well_Density proxy
+- Adjust interpolated values to satisfy physics
 
-### 4.3 Output Format
-
-For each village:
-```json
-{
-  "village_id": "KRI_VIL_001",
-  "village_name": "Gudivada",
-  "mandal": "Gudivada",
-  "aquifer_type": "Alluvium",
-  "prediction": {
-    "water_level_m": 14.2,
-    "uncertainty_m": 2.1,
-    "confidence": "medium"
-  },
-  "influences": [
-    {"piezometer": "P047", "distance_km": 2.3, "weight": 0.45},
-    {"piezometer": "P032", "distance_km": 5.1, "weight": 0.28}
-  ],
-  "risk_tier": "moderate",
-  "validation_priority": 7
-}
-```
+**Step 3: Validation**
+- Leave-one-out CV on 138 piezometers
+- Report RMSE, MAE, R²
 
 ---
 
-## 5. Implementation Progress
+## 4. Implementation Plan
 
-### 5.1 Progress Summary
+### Phase 1: Data Foundation (Current)
+- [ ] 1.1 Load piezometer data (locations + time series)
+- [ ] 1.2 Load village boundaries
+- [ ] 1.3 Load aquifer boundaries
+- [ ] 1.4 Load soil data with infiltration classification
+- [ ] 1.5 Load bore well data
+- [ ] 1.6 Load pumping data
+- [ ] 1.7 Spatial join: assign each village and piezometer to an aquifer
+- [ ] 1.8 Spatial join: assign soil type to each village
 
-| Phase | Status | Progress |
-|-------|--------|----------|
-| Phase 1: Data Foundation | Not Started | 0% |
-| Phase 2: Baseline Model | Not Started | 0% |
-| Phase 3: Physics Constraints | Not Started | 0% |
-| Phase 4: GRACE Constraint | Not Started | 0% |
-| Phase 5: Multi-Signal Validation | Not Started | 0% |
-| Phase 6: Model Selection | Not Started | 0% |
-| Phase 7: Dashboard | Not Started | 0% |
+### Phase 2: Aquifer-Stratified Interpolation
+- [ ] 2.1 Group piezometers by aquifer type
+- [ ] 2.2 For each aquifer, fit IDW/Kriging model
+- [ ] 2.3 Predict water level at each village centroid
+- [ ] 2.4 Calculate uncertainty based on distance to nearest piezometer
+- [ ] 2.5 Leave-one-out cross-validation
 
-**Overall Progress: 0%**
+### Phase 3: Physics Constraints
+- [ ] 3.1 Extract rainfall per village (from CHIRPS)
+- [ ] 3.2 Calculate infiltration factor per village (from soil type)
+- [ ] 3.3 Calculate recharge = rainfall × infiltration
+- [ ] 3.4 Calculate extraction from pumping data (713 villages have direct data)
+- [ ] 3.5 Estimate extraction for remaining villages from bore well density
+- [ ] 3.6 Apply water balance adjustment
 
-### 5.2 Detailed Task Tracking
+### Phase 4: Output & Visualization
+- [ ] 4.1 Generate predictions for all 939 villages
+- [ ] 4.2 Classify risk tiers (Critical/High/Moderate/Low)
+- [ ] 4.3 Create simple map visualization
+- [ ] 4.4 Export results to GeoJSON/CSV
 
-#### Phase 1: Data Foundation
-- [ ] 1.1 Create data loading module for hackathon data
-  - [ ] Load piezometer locations and metadata
-  - [ ] Load water level time series
-  - [ ] Load village boundaries
-  - [ ] Load aquifer boundaries
-  - [ ] Load soil data
-  - [ ] Load bore well data
-  - [ ] Load pumping data
-- [ ] 1.2 Process GRACE satellite data
-  - [ ] Download GRACE mascon data for Krishna region
-  - [ ] Extract groundwater storage anomaly time series
-  - [ ] Align temporal resolution with piezometer data
-- [ ] 1.3 Download and process multi-signal data
-  - [ ] Download MODIS NDVI for Krishna district
-  - [ ] Download MODIS LST for Krishna district
-  - [ ] Calculate per-village statistics
-- [ ] 1.4 Create unified feature dataset
-  - [ ] Spatial join: village ↔ aquifer
-  - [ ] Spatial join: village ↔ soil
-  - [ ] Calculate terrain features from DEM
-  - [ ] Calculate well density per village
-  - [ ] Calculate pumping intensity per village
+---
 
-#### Phase 2: Baseline Model
-- [ ] 2.1 Exploratory spatial analysis
-  - [ ] Calculate spatial autocorrelation (Moran's I)
-  - [ ] Fit variograms per aquifer type
-  - [ ] Visualize piezometer distribution
-- [ ] 2.2 Implement aquifer-stratified kriging
-  - [ ] Group piezometers by aquifer
-  - [ ] Fit kriging model per aquifer
-  - [ ] Handle aquifers with few piezometers (fallback to IDW)
-- [ ] 2.3 Generate baseline predictions
-  - [ ] Predict for all village centroids
-  - [ ] Calculate prediction uncertainty
-  - [ ] Validate with leave-one-out CV
+## 5. Progress Log
 
-#### Phase 3: Physics Constraints
-- [ ] 3.1 Implement recharge calculation
-  - [ ] Extract rainfall per village from CHIRPS
-  - [ ] Apply soil infiltration factors
-  - [ ] Apply slope/runoff factors
-- [ ] 3.2 Implement extraction calculation
-  - [ ] Use pumping data where available
-  - [ ] Estimate from bore well density elsewhere
-- [ ] 3.3 Apply water balance constraint
-  - [ ] Calculate expected ΔStorage per village
-  - [ ] Adjust predictions to satisfy physics
+### 2026-01-17
 
-#### Phase 4: GRACE Regional Constraint
-- [ ] 4.1 Process GRACE to groundwater storage
-  - [ ] Download soil moisture (GLDAS)
-  - [ ] Calculate: GW = TWS - Soil_Moisture
-- [ ] 4.2 Implement regional constraint
-  - [ ] Calculate area-weighted sum of predictions
-  - [ ] Adjust to match GRACE observation
-  - [ ] Propagate constraint to village level
-
-#### Phase 5: Multi-Signal Validation
-- [ ] 5.1 Extract vegetation signals
-  - [ ] Calculate NDVI anomaly per village
-  - [ ] Calculate VCI (Vegetation Condition Index)
-- [ ] 5.2 Extract thermal signals
-  - [ ] Calculate LST anomaly per village
-- [ ] 5.3 Cross-validate predictions
-  - [ ] Correlate predictions with NDVI (expect negative)
-  - [ ] Correlate predictions with LST (expect positive)
-  - [ ] Flag inconsistent villages
-
-#### Phase 6: Model Selection & Training
-- [ ] 6.1 Evaluate baseline performance
-  - [ ] RMSE on leave-one-out CV
-  - [ ] Physical consistency score
-  - [ ] GRACE consistency score
-- [ ] 6.2 Decide on advanced model (if time permits)
-  - [ ] Option A: Enhanced kriging with features
-  - [ ] Option B: GNN with geology edges
-  - [ ] Option C: Physics-informed neural network
-- [ ] 6.3 Train final model
-  - [ ] Implement chosen approach
-  - [ ] Validate performance
-  - [ ] Generate final predictions
-
-#### Phase 7: Explainability & Dashboard
-- [ ] 7.1 Generate explanations
-  - [ ] For each prediction, list top influencing piezometers
-  - [ ] Show uncertainty sources
-  - [ ] Calculate validation priority score
-- [ ] 7.2 Build dashboard
-  - [ ] Map view with village predictions
-  - [ ] Risk classification display
-  - [ ] Drill-down to village details
-- [ ] 7.3 Active learning output
-  - [ ] Rank villages by information gain
-  - [ ] Generate recommended validation sequence
+| Time | Action | Result |
+|------|--------|--------|
+| 12:00 | Cleaned codebase - removed all previous code | Fresh start on main branch |
+| 12:30 | Created PROGRESS.md | Planning document |
+| 13:00 | Verified actual data files present | Confirmed all hackathon data exists |
+| 13:30 | Identified data gap: no rainfall in hackathon data | Will use CHIRPS |
+| 13:45 | Updated PROGRESS.md with verified inventory | Ready to start development |
 
 ---
 
@@ -324,42 +154,97 @@ For each village:
 
 | Date | Decision | Rationale |
 |------|----------|-----------|
-| 2026-01-17 | Clean slate - removed all previous code | Previous implementation didn't align with research findings; was training ML on interpolated values (circular) |
-| 2026-01-17 | Adopt multi-signal architecture | Research shows this solves the "no ground truth" validation problem |
-| | | |
+| 2026-01-17 | Clean slate - removed all previous code | Previous implementation trained ML on interpolated values (circular/invalid) |
+| 2026-01-17 | Use hackathon data + minimal external | Rainfall not provided, need CHIRPS; DEM needed for slope |
+| 2026-01-17 | Skip GRACE/NDVI for now | Focus on core solution first; add later if time permits |
+| 2026-01-17 | Use IDW over Kriging initially | Simpler, fewer assumptions, easier to debug |
 
 ---
 
-## 7. Open Questions
-
-1. **GRACE data granularity**: Is 50km resolution useful for village-level constraint, or too coarse?
-2. **Temporal alignment**: Which time period to focus on for predictions? Latest available or historical average?
-3. **Aquifer boundaries accuracy**: Are the provided aquifer shapefiles accurate enough for stratification?
-4. **Validation field visits**: Will the department provide any field validation data during the hackathon?
-
----
-
-## 8. Files Structure (Planned)
+## 7. File Structure
 
 ```
 SmartJal/
-├── PROGRESS.md                 # This file
-├── docs/                       # Research and planning docs
-│   ├── RESEARCH_FINDINGS.md    # Literature review
-│   └── ...
+├── PROGRESS.md                 # This file - tracks everything
+├── docs/                       # Research and reference docs
+│   └── RESEARCH_FINDINGS.md    # Literature review
 ├── data/
-│   ├── hackathon_provided/     # Original hackathon data
-│   ├── external_downloaded/    # GRACE, rainfall, etc.
-│   └── processed/              # Cleaned, joined datasets
+│   ├── hackathon_provided/     # Original hackathon data (verified)
+│   │   ├── WaterLevels_Krishna/
+│   │   ├── UseCase_extracted/
+│   │   ├── Aquifers_Krishna/
+│   │   ├── GTWells_Krishna/
+│   │   ├── GM_Krishna/
+│   │   ├── LULC_Krishna/
+│   │   └── Pumping Data.xlsx
+│   ├── external_downloaded/    # Supplements we downloaded
+│   │   ├── rainfall/chirps/
+│   │   ├── dem/
+│   │   └── grace/
+│   └── processed/              # Output of our processing
 ├── src/                        # Source code (to be created)
-│   ├── data/                   # Data loading and processing
-│   ├── models/                 # Prediction models
-│   ├── validation/             # Multi-signal validation
-│   └── dashboard/              # Visualization
-├── notebooks/                  # Exploration notebooks (optional)
-└── outputs/                    # Predictions, reports
+│   ├── data_loader.py          # Load all datasets
+│   ├── spatial_model.py        # Aquifer-stratified interpolation
+│   ├── physics_model.py        # Water balance constraints
+│   └── predict.py              # Generate predictions
+└── outputs/                    # Final predictions
 ```
 
 ---
 
-*This document will be updated as implementation progresses.*
+## 8. Key Equations
+
+### Water Balance
+```
+ΔStorage = Recharge - Extraction
+
+Where:
+  Recharge = Rainfall × Infiltration_Factor × (1 - Runoff_Factor)
+  Extraction = n_wells × unit_draft / area  (from Pumping Data.xlsx)
+```
+
+### Soil Infiltration Factors (from Department clarification)
+| Soil Type | Infiltration | Factor |
+|-----------|--------------|--------|
+| Sandy | High | 0.8 |
+| Loamy | Moderate | 0.5 |
+| Clayey | Low | 0.2 |
+
+### IDW Interpolation
+```
+For village v in aquifer A:
+  prediction(v) = Σ w_i × observation(p_i)
+
+Where:
+  w_i = (1/d_i²) / Σ(1/d_j²)
+  d_i = distance from village v to piezometer i
+  Only use piezometers in same aquifer A
+```
+
+---
+
+## 9. Validation Metrics
+
+| Metric | Target | Meaning |
+|--------|--------|---------|
+| RMSE | < 3m | Root mean square error on leave-one-out CV |
+| MAE | < 2m | Mean absolute error |
+| R² | > 0.7 | Coefficient of determination |
+
+---
+
+## 10. Next Steps
+
+**Immediate (Phase 1):**
+1. Create `src/data_loader.py` - load all hackathon data
+2. Verify data quality (missing values, CRS alignment)
+3. Perform spatial joins (village ↔ aquifer, village ↔ soil)
+
+**Then (Phase 2):**
+1. Implement aquifer-stratified IDW
+2. Run leave-one-out CV
+3. Report baseline metrics
+
+---
+
+*This document is updated continuously as work progresses.*
