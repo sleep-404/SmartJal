@@ -1,6 +1,6 @@
 # Smart Jal - Implementation Progress Tracker
 
-**Last Updated:** 2026-01-17 13:45 IST
+**Last Updated:** 2026-01-17 14:30 IST
 **Status:** Starting Development
 **Current Phase:** Phase 1 - Data Foundation
 
@@ -16,11 +16,32 @@ Predict groundwater levels for **939 villages** in Krishna District, Andhra Prad
 - **Sparse coverage**: 138 piezometers across ~7,000 km² = 1 sensor per 50 km²
 - **Geological heterogeneity**: Different aquifer types behave differently
 
-### 1.3 What Success Looks Like
+### 1.3 What We Are Predicting (Clarified)
+- **Target:** Water level (depth in meters) for each of 939 villages
+- **Time Period:** Latest available month (to demonstrate method works)
+- **Method:** Aquifer-stratified spatial interpolation from 138 piezometers
+- **Extensible:** Method can be applied to any month in the 347-month dataset
+
+### 1.4 What Success Looks Like
 1. Predictions for all 939 villages with uncertainty estimates
 2. Predictions that respect aquifer boundaries (geologically coherent)
-3. Predictions that satisfy water balance (physically consistent)
-4. Validation via leave-one-out cross-validation on piezometers
+3. Validation via leave-one-out cross-validation on 138 piezometers
+4. Clear deliverables: GeoJSON + CSV + validation metrics
+
+### 1.5 Final Deliverables
+| Deliverable | Description | Priority |
+|-------------|-------------|----------|
+| `village_predictions.geojson` | 939 villages with predicted water levels, uncertainty, risk tier | REQUIRED |
+| `village_predictions.csv` | Same data in tabular format | REQUIRED |
+| Validation metrics | RMSE, MAE, R² from leave-one-out CV | REQUIRED |
+| Simple map visualization | Villages colored by risk tier | REQUIRED |
+| Streamlit dashboard | Interactive exploration | OPTIONAL |
+
+### 1.6 Validation Limitation (Acknowledged)
+- We can only validate at **piezometer locations** (138 points)
+- We **cannot directly validate** village predictions (no ground truth)
+- Leave-one-out CV tells us how well we predict at known locations
+- Village predictions are extrapolations - their accuracy is inferred, not measured
 
 ---
 
@@ -103,7 +124,19 @@ DEM (SRTM) → Slope for runoff
 
 ## 4. Implementation Plan (Detailed)
 
-### Phase 1: Data Foundation (Current)
+### Phase Priority Summary
+
+| Phase | Priority | Reason |
+|-------|----------|--------|
+| Phase 1: Data Foundation | **REQUIRED** | Must load and prepare all data |
+| Phase 2: Spatial Interpolation | **REQUIRED** | This IS the core goal - interpolate from 138 to 939 |
+| Phase 3: Physics Constraints | **OPTIONAL** | Enhancement, not core ask |
+| Phase 4.1-4.3: Output & Export | **REQUIRED** | Must produce deliverables |
+| Phase 4.4: Dashboard | **OPTIONAL** | Nice to have for demo |
+
+---
+
+### Phase 1: Data Foundation [REQUIRED] (Current)
 
 #### 1.1 Load Piezometer Data
 - [ ] 1.1.1 Parse `master data_updated.xlsx`
@@ -158,7 +191,9 @@ DEM (SRTM) → Slope for runoff
 
 ---
 
-### Phase 2: Spatial Interpolation
+### Phase 2: Spatial Interpolation [REQUIRED] - CORE GOAL
+
+**This phase IS the main goal. Everything else supports this.**
 
 #### 2.1 Analyze Piezometer Distribution
 - [ ] 2.1.1 Count piezometers per aquifer type
@@ -197,7 +232,9 @@ DEM (SRTM) → Slope for runoff
 
 ---
 
-### Phase 3: Physics Constraints
+### Phase 3: Physics Constraints [OPTIONAL] - Enhancement Only
+
+**This phase is NOT required for core deliverable. Implement only if time permits after Phase 2 is complete and validated.**
 
 #### 3.1 Extract Rainfall Data
 - [ ] 3.1.1 Load CHIRPS GeoTIFFs for target time period
@@ -230,14 +267,15 @@ DEM (SRTM) → Slope for runoff
 
 ---
 
-### Phase 4: Output & Visualization
+### Phase 4: Output & Visualization [MIXED]
 
-#### 4.1 Generate Final Predictions
-- [ ] 4.1.1 Combine: spatial interpolation (primary) + physics adjustment (secondary)
-- [ ] 4.1.2 Calculate final uncertainty = f(distance, physics consistency, aquifer type)
-- [ ] 4.1.3 Generate confidence tier: High/Medium/Low
+#### 4.1 Generate Final Predictions [REQUIRED]
+- [ ] 4.1.1 Use spatial interpolation predictions from Phase 2
+- [ ] 4.1.2 Calculate uncertainty = f(distance to nearest piezometer, piezometer count in aquifer)
+- [ ] 4.1.3 Generate confidence tier: High (close to piezometer), Medium, Low (far from piezometer)
+- [ ] 4.1.4 (Optional) If Phase 3 done: blend with physics adjustment
 
-#### 4.2 Classify Risk Tiers
+#### 4.2 Classify Risk Tiers [REQUIRED]
 - [ ] 4.2.1 Define thresholds based on water level depth:
   - Critical: > 15m depth
   - High: 10-15m depth
@@ -246,15 +284,17 @@ DEM (SRTM) → Slope for runoff
 - [ ] 4.2.2 Assign risk tier to each village
 - [ ] 4.2.3 Calculate summary: count and % of villages per tier
 
-#### 4.3 Export Results
+#### 4.3 Export Results [REQUIRED]
 - [ ] 4.3.1 CSV: `outputs/village_predictions.csv`
   - Columns: village_id, name, mandal, lat, lon, predicted_level, uncertainty, risk_tier
 - [ ] 4.3.2 GeoJSON: `outputs/village_predictions.geojson`
   - Full geometry + all attributes for mapping
 - [ ] 4.3.3 Summary report: `outputs/prediction_report.md`
   - Validation metrics, risk distribution, methodology notes
+- [ ] 4.3.4 Simple static map: `outputs/prediction_map.html`
+  - Villages colored by risk tier using Folium
 
-#### 4.4 Build Dashboard
+#### 4.4 Build Interactive Dashboard [OPTIONAL]
 - [ ] 4.4.1 Create Streamlit app: `src/dashboard.py`
 - [ ] 4.4.2 Add map with Folium showing village polygons
 - [ ] 4.4.3 Color villages by risk tier (red/orange/yellow/green)
@@ -263,10 +303,13 @@ DEM (SRTM) → Slope for runoff
 - [ ] 4.4.6 Add summary statistics panel
 - [ ] 4.4.7 Add aquifer filter dropdown
 
-**Phase 4 Output:**
+**Phase 4 Output (Required):**
 - `outputs/village_predictions.csv`
 - `outputs/village_predictions.geojson`
 - `outputs/prediction_report.md`
+- `outputs/prediction_map.html` (simple static map)
+
+**Phase 4 Output (Optional):**
 - Working Streamlit dashboard
 
 ---
