@@ -75,6 +75,23 @@ def load_latest_risk():
 
 
 @st.cache_data
+def load_latest_geojson():
+    """Load most recent GeoJSON with full village data including coordinates."""
+    import geopandas as gpd
+    geojson_files = sorted(OUTPUT_DIR.glob("villages_*.geojson"), reverse=True)
+    if geojson_files:
+        gdf = gpd.read_file(geojson_files[0])
+        # Convert to DataFrame for easier handling
+        df = pd.DataFrame(gdf.drop(columns=['geometry']))
+        # Add risk tier label if not present
+        if 'risk_tier' in df.columns and 'risk_tier_label' not in df.columns:
+            tier_map = {4: 'Critical', 3: 'High', 2: 'Moderate', 1: 'Low'}
+            df['risk_tier_label'] = df['risk_tier'].map(tier_map).fillna('Unknown')
+        return df
+    return None
+
+
+@st.cache_data
 def load_grace_data():
     """Load GRACE time series."""
     grace_file = DATA_DIR / "grace" / "grace_krishna_proxy.csv"
@@ -321,7 +338,9 @@ def main():
     elif page == "Risk Map":
         st.header("Risk Map")
 
-        if risk_data is not None and 'centroid_lat' in risk_data.columns:
+        # Load GeoJSON which has coordinates
+        map_data = load_latest_geojson()
+        if map_data is not None and 'centroid_lat' in map_data.columns:
             # Filters
             col1, col2 = st.columns(2)
             with col1:
@@ -331,21 +350,21 @@ def main():
                     default=['Critical', 'High', 'Moderate', 'Low']
                 )
             with col2:
-                if 'geo_class' in risk_data.columns:
+                if 'geo_class' in map_data.columns:
                     aquifer_filter = st.multiselect(
                         "Filter by Aquifer",
-                        options=risk_data['geo_class'].unique().tolist(),
-                        default=risk_data['geo_class'].unique().tolist()
+                        options=map_data['geo_class'].unique().tolist(),
+                        default=map_data['geo_class'].unique().tolist()
                     )
                 else:
                     aquifer_filter = None
 
             # Apply filters
-            filtered = risk_data[risk_data['risk_tier_label'].isin(risk_filter)]
+            filtered = map_data[map_data['risk_tier_label'].isin(risk_filter)]
             if aquifer_filter:
                 filtered = filtered[filtered['geo_class'].isin(aquifer_filter)]
 
-            st.info(f"Showing {len(filtered)} of {len(risk_data)} villages")
+            st.info(f"Showing {len(filtered)} of {len(map_data)} villages")
 
             # Display map
             risk_map = create_risk_map(filtered)
