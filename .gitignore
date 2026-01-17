@@ -40,3 +40,13 @@ node_modules/
 # Model artifacts (generated)
 *.pkl
 backend/models/metadata.json
+
+# Large data files (not pushed to GitHub)
+data/external_downloaded/cgwb/
+data/external_downloaded/landcover/*.tif
+data/external_downloaded/dem/*.hgt
+data/external_downloaded/satellite/
+data/external_downloaded/rainfall/*.nc
+*.nc
+*.tif
+*.hgt

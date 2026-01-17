@@ -15,9 +15,10 @@ warnings.filterwarnings('ignore')
 
 # Base paths
 BASE_DIR = Path(__file__).parent.parent.parent
-DATA_DIR = BASE_DIR / "downloaded_data"
-OFFICIAL_DIR = BASE_DIR / "SmartJal_extracted" / "SmartJal"
-USECASE_DIR = BASE_DIR / "UseCase_extracted"
+DATA_DIR = BASE_DIR / "data" / "external_downloaded"
+HACKATHON_DIR = BASE_DIR / "data" / "hackathon_provided"
+OFFICIAL_DIR = HACKATHON_DIR / "SmartJal_extracted" / "SmartJal"
+USECASE_DIR = HACKATHON_DIR / "UseCase_extracted"
 
 
 def load_water_levels() -> pd.DataFrame:

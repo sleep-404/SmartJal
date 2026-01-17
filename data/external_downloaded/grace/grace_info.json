@@ -1,0 +1,22 @@
+{
+  "source": "GRACE/GRACE-FO JPL Mascons",
+  "region": "Krishna District, Andhra Pradesh",
+  "bounds": {
+    "min_lon": 80.0,
+    "max_lon": 81.5,
+    "min_lat": 15.5,
+    "max_lat": 17.0
+  },
+  "notes": [
+    "GRACE provides ~50km resolution TWS anomalies",
+    "For Krishna district, we use regional average",
+    "Published studies show South India trend: -0.5 to -1.5 cm/year",
+    "Seasonal amplitude: 5-15 cm (monsoon peak in Oct-Nov)"
+  ],
+  "usage": "Constrain village predictions to sum to regional GRACE value",
+  "download_options": [
+    "1. Google Earth Engine: ee.ImageCollection('NASA/GRACE/MASS_GRIDS/LAND')",
+    "2. NASA PODAAC: https://podaac.jpl.nasa.gov/GRACE",
+    "3. JPL GRACE Plotter: https://grace.jpl.nasa.gov/data/get-data/"
+  ]
+}
